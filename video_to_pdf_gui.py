@@ -4,11 +4,16 @@ import io
 import sys
 from pathlib import Path
 from typing import Optional
+import tempfile
+import subprocess
+import shutil
+import cv2
 
 import tkinter as tk
 from tkinter import ttk, filedialog, messagebox
 
 from video_to_pdf_phash import extract_frames_to_pdf, parse_crop
+from downloader import download_video
 
 
 def _enable_windows_dpi_awareness() -> None:
@@ -68,6 +73,55 @@ class App(tk.Tk):
         self._worker: Optional[threading.Thread] = None
         self.after(100, self._drain_log)
 
+    def _parse_time_to_seconds(self, text: str) -> Optional[float]:
+        s = (text or "").strip()
+        if not s:
+            return None
+        try:
+            parts = s.split(":")
+            if len(parts) == 1:
+                return float(parts[0])
+            if len(parts) == 2:
+                m = int(parts[0])
+                sec = float(parts[1])
+                return m * 60 + sec
+            if len(parts) == 3:
+                h = int(parts[0])
+                m = int(parts[1])
+                sec = float(parts[2])
+                return h * 3600 + m * 60 + sec
+            raise ValueError("invalid format")
+        except Exception:
+            raise ValueError("时间格式应为 秒 或 mm:ss 或 hh:mm:ss，可带小数")
+
+    def _ffmpeg_path(self) -> Optional[str]:
+        return shutil.which("ffmpeg")
+
+    def _trim_video_with_ffmpeg(self, src: Path, dst: Path, start_s: Optional[float], end_s: Optional[float]) -> None:
+        ffmpeg = self._ffmpeg_path()
+        if not ffmpeg:
+            raise RuntimeError("未找到 ffmpeg，请先安装并加入 PATH")
+
+        args = [ffmpeg, "-y"]
+        duration = None
+        if start_s is not None and end_s is not None and end_s > start_s:
+            duration = end_s - start_s
+        if start_s is not None:
+            args += ["-ss", f"{start_s:.3f}"]
+        args += ["-i", str(src)]
+        if duration is not None:
+            args += ["-t", f"{duration:.3f}"]
+
+        fast_args = args + ["-c", "copy", str(dst)]
+        res = subprocess.run(fast_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if res.returncode == 0 and dst.exists() and dst.stat().st_size > 0:
+            return
+
+        slow_args = args + ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-b:a", "192k", str(dst)]
+        res2 = subprocess.run(slow_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        if res2.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
+            raise RuntimeError("ffmpeg 剪切失败")
+
     def _build_ui(self) -> None:
         pad = 8
         main = ttk.Frame(self)
@@ -80,14 +134,25 @@ class App(tk.Tk):
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.outdir_var = tk.StringVar()
+        self.dldir_var = tk.StringVar()
+        self.start_time_var = tk.StringVar()
+        self.end_time_var = tk.StringVar()
 
-        self._row(file_frame, "输入视频", self.input_var, browse=lambda: self._browse_file(self.input_var, [
+        self._row(file_frame, "输入视频/网址", self.input_var, browse=lambda: self._browse_file(self.input_var, [
             ("Video files", "*.mp4;*.mov;*.mkv;*.avi;*.flv;*.webm"), ("All files", "*.*")
         ]))
         self._row(file_frame, "输出PDF(可空)", self.output_var, browse=lambda: self._save_file(self.output_var, (
             ("PDF", "*.pdf"), ("All files", "*.*")
         )))
         self._row(file_frame, "帧输出目录(可空)", self.outdir_var, browse=lambda: self._choose_dir(self.outdir_var))
+        self._row(file_frame, "下载目录(可空)", self.dldir_var, browse=lambda: self._choose_dir(self.dldir_var))
+        self._row(file_frame, "开始时间(可空)", self.start_time_var)
+        self._row(file_frame, "结束时间(可空)", self.end_time_var)
+
+        # Time format hint
+        hint_row = ttk.Frame(file_frame)
+        hint_row.pack(fill=tk.X, pady=(2, 0))
+        ttk.Label(hint_row, text="时间格式示例： 90（秒）  或  01:30  或  1:02:03.5").pack(side=tk.LEFT)
 
         # Parameters
         params = ttk.LabelFrame(main, text="参数")
@@ -143,7 +208,11 @@ class App(tk.Tk):
 
         ac_top = ttk.Frame(ac)
         ac_top.pack(fill=tk.X)
-        ttk.Checkbutton(ac_top, text="启用自动裁剪", variable=self.auto_crop_var).pack(side=tk.LEFT)
+        self.auto_crop_cb = ttk.Checkbutton(ac_top, text="启用自动裁剪", variable=self.auto_crop_var, command=self._on_toggle_auto_crop)
+        self.auto_crop_cb.pack(side=tk.LEFT)
+        self.manual_select_var = tk.BooleanVar(value=False)
+        self.manual_select_cb = ttk.Checkbutton(ac_top, text="主动框选 PPT 区域", variable=self.manual_select_var, command=self._on_toggle_manual_select)
+        self.manual_select_cb.pack(side=tk.LEFT, padx=(12, 0))
 
         ac_grid = ttk.Frame(ac)
         ac_grid.pack(fill=tk.X, pady=(4, 0))
@@ -190,6 +259,22 @@ class App(tk.Tk):
         if path:
             var.set(path)
 
+    def _on_toggle_auto_crop(self) -> None:
+        # If enabling auto-crop, disable manual select
+        try:
+            if bool(self.auto_crop_var.get()):
+                self.manual_select_var.set(False)
+        except Exception:
+            pass
+
+    def _on_toggle_manual_select(self) -> None:
+        # If enabling manual select, disable auto-crop
+        try:
+            if bool(self.manual_select_var.get()):
+                self.auto_crop_var.set(False)
+        except Exception:
+            pass
+
     def _append_log(self, text: str) -> None:
         self.log.insert(tk.END, text)
         self.log.see(tk.END)
@@ -210,7 +295,7 @@ class App(tk.Tk):
 
         input_path = self.input_var.get().strip()
         if not input_path:
-            messagebox.showwarning("缺少输入", "请先选择输入视频")
+            messagebox.showwarning("缺少输入", "请先输入本地视频路径或视频网址")
             return
 
         self.log.delete("1.0", tk.END)
@@ -220,16 +305,112 @@ class App(tk.Tk):
             stdout = StreamToQueue(self._log_queue)
             stderr = StreamToQueue(self._log_queue)
             try:
-                input_p = Path(input_path)
+                # Determine if input is URL
+                is_url = input_path.lower().startswith(("http://", "https://"))
+
+                # If URL, download first
+                if is_url:
+                    dl_dir_str = self.dldir_var.get().strip()
+                    dl_dir = Path(dl_dir_str) if dl_dir_str else Path(tempfile.gettempdir()) / "video2pdf_downloads"
+                    print(f"检测到网址输入，开始下载到: {dl_dir}")
+
+                    def on_progress(d: dict) -> None:
+                        try:
+                            status = d.get("status")
+                            if status == "downloading":
+                                p = d.get("_percent_str", "").strip()
+                                s = d.get("_speed_str", "").strip()
+                                eta = d.get("_eta_str", "").strip()
+                                line = f"[下载中] {p}  速度 {s}  剩余 {eta}\r"
+                                self._log_queue.put(line)
+                            elif status == "finished":
+                                total = d.get("total_bytes") or d.get("total_bytes_estimate")
+                                size_mb = f"{(int(total)/1048576):.1f}MB" if total else "?"
+                                self._log_queue.put(f"\n[下载完成] 已保存临时文件，大小约 {size_mb}\n")
+                        except Exception:
+                            pass
+
+                    downloaded_path = download_video(
+                        url=input_path,
+                        output_dir=dl_dir,
+                        on_progress=on_progress,
+                    )
+                    input_p = downloaded_path
+                    print(f"已下载: {input_p}")
+                else:
+                    input_p = Path(input_path)
+
+                # Optional trimming via ffmpeg if time range provided
+                start_s = None
+                end_s = None
+                try:
+                    start_s = self._parse_time_to_seconds(self.start_time_var.get())
+                except Exception as e:
+                    raise RuntimeError(f"开始时间格式错误: {e}")
+                try:
+                    end_s = self._parse_time_to_seconds(self.end_time_var.get())
+                except Exception as e:
+                    raise RuntimeError(f"结束时间格式错误: {e}")
+
+                if start_s is not None or end_s is not None:
+                    if end_s is not None and start_s is not None and end_s <= start_s:
+                        raise RuntimeError("结束时间必须大于开始时间")
+                    clip_dir = (input_p.parent if input_p.parent.exists() else Path(tempfile.gettempdir())) / "video2pdf_segments"
+                    clip_dir.mkdir(parents=True, exist_ok=True)
+                    clip_p = clip_dir / (input_p.stem + ".clip.mp4")
+                    print(f"检测到剪切参数，开始剪切: start={start_s if start_s is not None else '未指定'}, end={end_s if end_s is not None else '未指定'}")
+                    self._trim_video_with_ffmpeg(input_p, clip_p, start_s, end_s)
+                    input_p = clip_p
+                    print(f"剪切完成: {input_p}")
+
+                # Report video resolution to help manual crop configuration
+                try:
+                    cap_probe = cv2.VideoCapture(str(input_p))
+                    if cap_probe.isOpened():
+                        width = int(cap_probe.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+                        height = int(cap_probe.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+                        if not width or not height:
+                            ok, frame0 = cap_probe.read()
+                            if ok and frame0 is not None:
+                                height, width = frame0.shape[:2]
+                        cap_probe.release()
+                        if width and height:
+                            self._log_queue.put(f"\n视频分辨率: {width} x {height}\n")
+                except Exception:
+                    pass
+
                 output_pdf_str = self.output_var.get().strip()
                 output_pdf = Path(output_pdf_str) if output_pdf_str else input_p.with_suffix('.pdf')
                 out_dir_str = self.outdir_var.get().strip()
                 out_dir = Path(out_dir_str) if out_dir_str else input_p.parent / 'slides_phash'
 
+                # Manual ROI selection (takes precedence over auto-crop)
+                manual_crop = None
+                if bool(self.manual_select_var.get()):
+                    try:
+                        cap0 = cv2.VideoCapture(str(input_p))
+                        ok, frame = cap0.read()
+                        cap0.release()
+                        if not ok or frame is None:
+                            raise RuntimeError("无法读取视频首帧用于框选")
+                        self._log_queue.put("请在弹出的窗口中框选 PPT 区域，按回车确认，Esc 取消。\n")
+                        roi = cv2.selectROI("框选 PPT 区域", frame, showCrosshair=True, fromCenter=False)
+                        cv2.destroyWindow("框选 PPT 区域")
+                        x, y, w, h = map(int, roi)
+                        if w > 0 and h > 0:
+                            manual_crop = (x, y, w, h)
+                            self._log_queue.put(f"已选择区域: x={x}, y={y}, w={w}, h={h}\n")
+                        else:
+                            self._log_queue.put("已取消框选，继续使用原设置。\n")
+                    except Exception as e:
+                        self._log_queue.put(f"框选失败: {e}\n")
+
                 # Parse numerics with defaults
                 sample_seconds = float(self.sample_var.get() or 0.5)
                 threshold = int(self.threshold_var.get() or 10)
                 crop = parse_crop(self.crop_var.get().strip() or None)
+                if manual_crop is not None:
+                    crop = manual_crop
                 scale_width = int(self.scale_width_var.get()) if (self.scale_width_var.get().strip()) else None
                 max_pages = int(self.max_pages_var.get()) if (self.max_pages_var.get().strip()) else None
                 a4 = bool(self.a4_var.get())
@@ -239,7 +420,7 @@ class App(tk.Tk):
                 auto_trim_pad = int(self.auto_trim_pad_var.get() or 6)
                 auto_trim_sides = self.auto_trim_sides_var.get() or 'tb'
 
-                auto_crop = bool(self.auto_crop_var.get())
+                auto_crop = False if manual_crop is not None else bool(self.auto_crop_var.get())
                 auto_crop_pad = int(self.auto_crop_pad_var.get() or 6)
                 auto_crop_min_area_ratio = float(self.auto_crop_min_area_var.get() or 0.05)
 

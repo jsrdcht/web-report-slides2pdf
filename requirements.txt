@@ -1,4 +1,5 @@
 opencv-python>=4.7.0
 pillow>=9.5.0
 numpy>=1.23.0
+yt-dlp>=2024.07.16
 

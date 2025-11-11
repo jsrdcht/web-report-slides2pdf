@@ -2,16 +2,20 @@
 
 block_cipher = None
 
-from PyInstaller.utils.hooks import collect_submodules
+from PyInstaller.utils.hooks import collect_submodules, collect_all
 
 hiddenimports = []
 hiddenimports += collect_submodules('cv2')
 
+# Collect yt_dlp resources to ensure it works in frozen app
+yd_datas, yd_binaries, yd_hiddenimports = collect_all('yt_dlp')
+hiddenimports += yd_hiddenimports
+
 a = Analysis(
     ['video_to_pdf_gui.py'],
     pathex=['.'],
-    binaries=[],
-    datas=[],
+    binaries=yd_binaries,
+    datas=yd_datas,
     hiddenimports=hiddenimports,
     hookspath=[],
     hooksconfig={},
