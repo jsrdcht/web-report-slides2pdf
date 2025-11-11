@@ -44,9 +44,10 @@ jobs:
       - name: Zip GUI bundle
         if: success()
         run: |
-          $zip = \"video2pdf-gui-windows.zip\"
+          $ErrorActionPreference = 'Stop'
+          $zip = 'video2pdf-gui-windows.zip'
           if (Test-Path $zip) { Remove-Item $zip -Force }
-          Compress-Archive -Path \"dist/video2pdf-gui/*\" -DestinationPath $zip
+          Compress-Archive -Path 'dist/video2pdf-gui/*' -DestinationPath $zip -Force
         shell: pwsh
 
       - name: Upload artifact (video2pdf-gui)
