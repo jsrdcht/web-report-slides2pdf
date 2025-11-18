@@ -113,12 +113,12 @@ class App(tk.Tk):
             args += ["-t", f"{duration:.3f}"]
 
         fast_args = args + ["-c", "copy", str(dst)]
-        res = subprocess.run(fast_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        res = subprocess.run(fast_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False)
         if res.returncode == 0 and dst.exists() and dst.stat().st_size > 0:
             return
 
         slow_args = args + ["-c:v", "libx264", "-preset", "fast", "-crf", "23", "-c:a", "aac", "-b:a", "192k", str(dst)]
-        res2 = subprocess.run(slow_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=True)
+        res2 = subprocess.run(slow_args, stdout=subprocess.PIPE, stderr=subprocess.STDOUT, text=False)
         if res2.returncode != 0 or not dst.exists() or dst.stat().st_size == 0:
             raise RuntimeError("ffmpeg 剪切失败")
 
