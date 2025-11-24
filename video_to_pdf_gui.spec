@@ -4,7 +4,8 @@ block_cipher = None
 
 from PyInstaller.utils.hooks import collect_submodules, collect_all
 
-hiddenimports = []
+hiddenimports = ['tkinter', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.ttk']
+# Be conservative; cv2/PIL hooks generally cover these, but allow extension when needed
 hiddenimports += collect_submodules('cv2')
 
 # Collect yt_dlp resources to ensure it works in frozen app
@@ -54,4 +55,14 @@ coll = COLLECT(
     upx_exclude=[],
     name='video2pdf-gui'
 )
+
+import sys
+if sys.platform == 'darwin':
+    app = BUNDLE(
+        coll,
+        name='video2pdf-gui.app',
+        icon=None,
+        bundle_identifier='com.github.video2pdf.gui'
+    )
+
 
