@@ -66,12 +66,22 @@ class App(tk.Tk):
             self.tk.call('tk', 'scaling', dpi / 72.0)
         except Exception:
             pass
-        self.geometry("760x680")
         self._build_ui()
+        self._set_initial_window_size()
 
         self._log_queue: "queue.Queue[str]" = queue.Queue()
         self._worker: Optional[threading.Thread] = None
         self.after(100, self._drain_log)
+
+    def _set_initial_window_size(self) -> None:
+        screen_w = self.winfo_screenwidth()
+        screen_h = self.winfo_screenheight()
+        width = min(1100, max(980, screen_w - 80))
+        height = min(820, max(640, screen_h - 100))
+        x = max(0, (screen_w - width) // 2)
+        y = max(0, (screen_h - height) // 2)
+        self.geometry(f"{width}x{height}+{x}+{y}")
+        self.minsize(900, 620)
 
     def _parse_time_to_seconds(self, text: str) -> Optional[float]:
         s = (text or "").strip()
@@ -127,14 +137,19 @@ class App(tk.Tk):
         main = ttk.Frame(self)
         main.pack(fill=tk.BOTH, expand=True, padx=pad, pady=pad)
 
+        top_grid = ttk.Frame(main)
+        top_grid.pack(fill=tk.X, padx=0, pady=(0, pad))
+
         # File inputs
-        file_frame = ttk.LabelFrame(main, text="输入/输出")
-        file_frame.pack(fill=tk.X, padx=0, pady=(0, pad))
+        file_frame = ttk.LabelFrame(top_grid, text="输入/输出")
+        file_frame.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, pad))
 
         self.input_var = tk.StringVar()
         self.output_var = tk.StringVar()
         self.outdir_var = tk.StringVar()
         self.dldir_var = tk.StringVar()
+        self.cookie_file_var = tk.StringVar()
+        self.browser_cookie_var = tk.StringVar(value="")
         self.start_time_var = tk.StringVar()
         self.end_time_var = tk.StringVar()
 
@@ -146,6 +161,10 @@ class App(tk.Tk):
         )))
         self._row(file_frame, "帧输出目录(可空)", self.outdir_var, browse=lambda: self._choose_dir(self.outdir_var))
         self._row(file_frame, "下载目录(可空)", self.dldir_var, browse=lambda: self._choose_dir(self.dldir_var))
+        self._row(file_frame, "cookies.txt(可空)", self.cookie_file_var, browse=lambda: self._browse_file(self.cookie_file_var, [
+            ("Cookie files", "*.txt;*.cookies"), ("All files", "*.*")
+        ]))
+        self._row(file_frame, "浏览器Cookies(可空)", self.browser_cookie_var)
         self._row(file_frame, "开始时间(可空)", self.start_time_var)
         self._row(file_frame, "结束时间(可空)", self.end_time_var)
 
@@ -155,8 +174,8 @@ class App(tk.Tk):
         ttk.Label(hint_row, text="时间格式示例： 90（秒）  或  01:30  或  1:02:03.5").pack(side=tk.LEFT)
 
         # Parameters
-        params = ttk.LabelFrame(main, text="参数")
-        params.pack(fill=tk.X, padx=0, pady=(0, pad))
+        params = ttk.LabelFrame(top_grid, text="参数")
+        params.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
 
         self.sample_var = tk.StringVar(value="0.5")
         self.threshold_var = tk.StringVar(value="10")
@@ -176,9 +195,12 @@ class App(tk.Tk):
         a4_cb = ttk.Checkbutton(a4_row, text="A4 排版", variable=self.a4_var)
         a4_cb.pack(side=tk.LEFT)
 
+        option_grid = ttk.Frame(main)
+        option_grid.pack(fill=tk.X, padx=0, pady=(0, pad))
+
         # Auto-trim
-        trim = ttk.LabelFrame(main, text="自动去白边")
-        trim.pack(fill=tk.X, padx=0, pady=(0, pad))
+        trim = ttk.LabelFrame(option_grid, text="自动去白边")
+        trim.pack(side=tk.LEFT, fill=tk.BOTH, expand=True, padx=(0, pad))
         self.auto_trim_var = tk.BooleanVar(value=True)
         self.auto_trim_ratio_var = tk.StringVar(value="0.98")
         self.auto_trim_pad_var = tk.StringVar(value="6")
@@ -200,8 +222,8 @@ class App(tk.Tk):
         side.pack(side=tk.LEFT, padx=(8, 0))
 
         # Auto-crop
-        ac = ttk.LabelFrame(main, text="自动裁剪(PPT区域)")
-        ac.pack(fill=tk.X, padx=0, pady=(0, pad))
+        ac = ttk.LabelFrame(option_grid, text="自动裁剪(PPT区域)")
+        ac.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
         self.auto_crop_var = tk.BooleanVar(value=True)
         self.auto_crop_pad_var = tk.StringVar(value="6")
         self.auto_crop_min_area_var = tk.StringVar(value="0.05")
@@ -225,9 +247,13 @@ class App(tk.Tk):
         self.run_btn = ttk.Button(action, text="开始运行", command=self._on_run)
         self.run_btn.pack(side=tk.LEFT)
 
-        self.log = tk.Text(main, height=18, wrap=tk.WORD)
-        self.log.pack(fill=tk.BOTH, expand=True)
-        ttk.Scrollbar(self.log, command=self.log.yview)
+        log_frame = ttk.Frame(main)
+        log_frame.pack(fill=tk.BOTH, expand=True)
+        self.log = tk.Text(log_frame, height=8, wrap=tk.WORD)
+        log_scroll = ttk.Scrollbar(log_frame, command=self.log.yview)
+        self.log.configure(yscrollcommand=log_scroll.set)
+        self.log.pack(side=tk.LEFT, fill=tk.BOTH, expand=True)
+        log_scroll.pack(side=tk.RIGHT, fill=tk.Y)
         self.log.configure(state=tk.NORMAL)
 
     def _row(self, parent: tk.Widget, label: str, var: tk.StringVar, browse=None) -> None:
@@ -312,7 +338,14 @@ class App(tk.Tk):
                 if is_url:
                     dl_dir_str = self.dldir_var.get().strip()
                     dl_dir = Path(dl_dir_str) if dl_dir_str else Path(tempfile.gettempdir()) / "video2pdf_downloads"
+                    cookie_file_str = self.cookie_file_var.get().strip()
+                    cookies_path = Path(cookie_file_str) if cookie_file_str else None
+                    browser_cookies = (self.browser_cookie_var.get().strip() or None) if not cookies_path else None
                     print(f"检测到网址输入，开始下载到: {dl_dir}")
+                    if cookies_path:
+                        print(f"使用 cookies 文件: {cookies_path}")
+                    elif browser_cookies:
+                        print(f"从浏览器读取 cookies: {browser_cookies}")
 
                     def on_progress(d: dict) -> None:
                         try:
@@ -333,6 +366,8 @@ class App(tk.Tk):
                     downloaded_path = download_video(
                         url=input_path,
                         output_dir=dl_dir,
+                        cookies=cookies_path,
+                        cookies_from_browser=browser_cookies,
                         on_progress=on_progress,
                     )
                     input_p = downloaded_path

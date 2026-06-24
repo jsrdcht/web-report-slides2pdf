@@ -6,6 +6,9 @@ from typing import Optional, Tuple, List
 import cv2
 import numpy as np
 from PIL import Image
+from PIL import JpegImagePlugin, PdfImagePlugin
+
+_ = (JpegImagePlugin, PdfImagePlugin)
 
 # Pillow 9/10 compatibility for LANCZOS
 try:
@@ -250,7 +253,7 @@ def extract_frames_to_pdf(
 
     first, rest = images[0], images[1:]
     output_pdf.parent.mkdir(parents=True, exist_ok=True)
-    first.save(str(output_pdf), save_all=True, append_images=rest)
+    first.save(str(output_pdf), format="PDF", save_all=True, append_images=rest)
     print(f"完成: {output_pdf} (共 {len(images)} 页)")
 
 

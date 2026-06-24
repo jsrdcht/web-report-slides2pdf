@@ -7,6 +7,7 @@ from PyInstaller.utils.hooks import collect_submodules, collect_all
 hiddenimports = ['tkinter', 'tkinter.filedialog', 'tkinter.messagebox', 'tkinter.ttk']
 # Be conservative; cv2/PIL hooks generally cover these, but allow extension when needed
 hiddenimports += collect_submodules('cv2')
+hiddenimports += collect_submodules('PIL')
 
 # Collect yt_dlp resources to ensure it works in frozen app
 yd_datas, yd_binaries, yd_hiddenimports = collect_all('yt_dlp')

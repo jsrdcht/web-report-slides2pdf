@@ -5,11 +5,25 @@ from typing import Callable, Optional
 from yt_dlp import YoutubeDL
 
 
+def _parse_browser_cookie_spec(spec: Optional[str]) -> Optional[tuple]:
+    if not spec:
+        return None
+    browser, _, profile = spec.partition(":")
+    browser = browser.strip()
+    profile = profile.strip()
+    if not browser:
+        return None
+    if profile:
+        return (browser, profile, None, None)
+    return (browser,)
+
+
 def download_video(
     url: str,
     output_dir: Path,
     *,
     cookies: Optional[Path] = None,
+    cookies_from_browser: Optional[str] = None,
     quality: str = "best",  # e.g. "best", "1080p", "720p"
     proxy: Optional[str] = None,
     playlist: bool = False,
@@ -53,6 +67,7 @@ def download_video(
         "ffmpeg_location": str(ffmpeg_location) if ffmpeg_location else None,
         "proxy": proxy,
         "cookiefile": str(cookies) if cookies else None,
+        "cookiesfrombrowser": None if cookies else _parse_browser_cookie_spec(cookies_from_browser),
         "writesubtitles": subtitles,
         "embedsubtitles": subtitles,
         "subtitleslangs": ["zh-Hans", "zh", "en"] if subtitles else [],
